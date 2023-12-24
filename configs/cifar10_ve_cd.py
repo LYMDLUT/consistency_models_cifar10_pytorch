@@ -16,7 +16,7 @@ def get_config():
     training.n_jitted_steps = 1
     training.snapshot_freq_for_preemption = 5000
     training.snapshot_freq = 10000
-    training.batch_size = 512
+    training.batch_size = 8
     training.loss_norm = "lpips"
     training.finetune = True
     training.stopgrad = True
@@ -67,7 +67,7 @@ def get_config():
     model.data_std = 0.5
     model.num_scales = 18
     model.dropout = 0.0
-
+    model.scale_by_sigma = False
     # optimization
     optim = config.optim
     optim.weight_decay = 0.0

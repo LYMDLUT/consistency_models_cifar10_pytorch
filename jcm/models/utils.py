@@ -1,4 +1,5 @@
-# Copyright 2023 (c) OpenAI.
+# coding=utf-8
+# Copyright 2020 The Google Research Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,428 +15,198 @@
 
 """All functions and modules related to model definition.
 """
-from typing import Any
 
-import flax
-import haiku as hk
-import functools
-import jax.numpy as jnp
-
+import torch
 from .. import sde_lib
-import jax
 import numpy as np
-from . import wideresnet_noise_conditional
-from .. import checkpoints
-from ..utils import T, batch_mul
-
-
-# The dataclass that stores all training states
-@flax.struct.dataclass
-class State:
-    step: int
-    lr: float
-    ema_rate: float
-    params: Any
-    params_ema: Any
-    model_state: Any
-    opt_state: Any
-    rng_state: Any
-
-
-@flax.struct.dataclass
-class StateWithTarget:
-    step: int
-    lr: float
-    ema_rate: float
-    params: Any
-    target_params: Any
-    params_ema: Any
-    model_state: Any
-    opt_state: Any
-    rng_state: Any
 
 
 _MODELS = {}
 
 
 def register_model(cls=None, *, name=None):
-    """A decorator for registering model classes."""
+  """A decorator for registering model classes."""
 
-    def _register(cls):
-        if name is None:
-            local_name = cls.__name__
-        else:
-            local_name = name
-        if local_name in _MODELS:
-            raise ValueError(f"Already registered model with name: {local_name}")
-        _MODELS[local_name] = cls
-        return cls
-
-    if cls is None:
-        return _register
+  def _register(cls):
+    if name is None:
+      local_name = cls.__name__
     else:
-        return _register(cls)
+      local_name = name
+    if local_name in _MODELS:
+      raise ValueError(f'Already registered model with name: {local_name}')
+    _MODELS[local_name] = cls
+    return cls
+
+  if cls is None:
+    return _register
+  else:
+    return _register(cls)
 
 
 def get_model(name):
-    return _MODELS[name]
+  return _MODELS[name]
 
 
-def init_model(rng, config):
-    """Initialize a `flax.linen.Module` model."""
-    rng = hk.PRNGSequence(rng)
-    model_name = config.model.name
-    model_def = functools.partial(get_model(model_name), config=config)
-    input_shape = (
-        jax.local_device_count(),
-        config.data.image_size,
-        config.data.image_size,
-        config.data.num_channels,
-    )
-    label_shape = input_shape[:1]
-    fake_input = jnp.zeros(input_shape)
-    fake_label = jnp.zeros(label_shape, dtype=jnp.int32)
-    model = model_def()
-    variables = model.init(
-        {"params": next(rng), "dropout": next(rng)}, fake_input, fake_label
-    )
-    # Variables is a `flax.FrozenDict`. It is immutable and respects functional programming
-    init_model_state, initial_params = variables.pop("params")
-    return model, init_model_state, initial_params
+def get_sigmas(config):
+  """Get sigmas --- the set of noise levels for SMLD from config files.
+  Args:
+    config: A ConfigDict object parsed from the config file
+  Returns:
+    sigmas: a jax numpy arrary of noise levels
+  """
+  sigmas = np.exp(
+    np.linspace(np.log(config.model.sigma_max), np.log(config.model.sigma_min), config.model.num_scales))
+
+  return sigmas
 
 
-def init_lpips(rng, config):
-    assert config.training.loss_norm.lower() == "lpips", "LPIPS is not used in training"
-    from .lpips import LPIPS
+def get_ddpm_params(config):
+  """Get betas and alphas --- parameters used in the original DDPM paper."""
+  num_diffusion_timesteps = 1000
+  # parameters need to be adapted if number of time steps differs from 1000
+  beta_start = config.model.beta_min / config.model.num_scales
+  beta_end = config.model.beta_max / config.model.num_scales
+  betas = np.linspace(beta_start, beta_end, num_diffusion_timesteps, dtype=np.float64)
 
-    model = LPIPS()
-    params = model.init(rng, jnp.zeros((1, 256, 256, 3)), jnp.zeros((1, 256, 256, 3)))
-    return model, params
+  alphas = 1. - betas
+  alphas_cumprod = np.cumprod(alphas, axis=0)
+  sqrt_alphas_cumprod = np.sqrt(alphas_cumprod)
+  sqrt_1m_alphas_cumprod = np.sqrt(1. - alphas_cumprod)
 
-
-def get_model_fn(model, params, states, train=False):
-    """Create a function to give the output of the score-based model.
-
-    Args:
-      model: A `flax.linen.Module` object the represent the architecture of score-based model.
-      params: A dictionary that contains all trainable parameters.
-      states: A dictionary that contains all mutable states.
-      train: `True` for training and `False` for evaluation.
-
-    Returns:
-      A model function.
-    """
-
-    def model_fn(x, labels, rng=None):
-        """Compute the output of the score-based model.
-
-        Args:
-          x: A mini-batch of input data.
-          labels: A mini-batch of conditioning variables for time steps. Should be interpreted differently
-            for different models.
-          rng: If present, it is the random state for dropout
-
-        Returns:
-          A tuple of (model output, new mutable states)
-        """
-        variables = {"params": params, **states}
-        if not train:
-            return model.apply(variables, x, labels, train=False, mutable=False), states
-        else:
-            rngs = {"dropout": rng}
-            return model.apply(
-                variables, x, labels, train=True, mutable=list(states.keys()), rngs=rngs
-            )
-
-    return model_fn
+  return {
+    'betas': betas,
+    'alphas': alphas,
+    'alphas_cumprod': alphas_cumprod,
+    'sqrt_alphas_cumprod': sqrt_alphas_cumprod,
+    'sqrt_1m_alphas_cumprod': sqrt_1m_alphas_cumprod,
+    'beta_min': beta_start * (num_diffusion_timesteps - 1),
+    'beta_max': beta_end * (num_diffusion_timesteps - 1),
+    'num_diffusion_timesteps': num_diffusion_timesteps
+  }
 
 
-def get_denoiser_fn(sde, model, params, states, train=False, return_state=False):
-    model_fn = get_model_fn(model, params, states, train=train)
-    assert isinstance(
-        sde, sde_lib.KVESDE
-    ), "Only KVE SDE is supported for building the denoiser"
-
-    def denoiser_fn(x, t, rng=None):
-        in_x = batch_mul(x, 1 / jnp.sqrt(t**2 + sde.data_std**2))
-        cond_t = 0.25 * jnp.log(t)
-        denoiser, state = model_fn(in_x, cond_t, rng)
-        denoiser = batch_mul(
-            denoiser, t * sde.data_std / jnp.sqrt(t**2 + sde.data_std**2)
-        )
-        skip_x = batch_mul(x, sde.data_std**2 / (t**2 + sde.data_std**2))
-        denoiser = skip_x + denoiser
-
-        if return_state:
-            return denoiser, state
-        else:
-            return denoiser
-
-    return denoiser_fn
+def create_model(config):
+  """Create the score model."""
+  model_name = config.model.name
+  score_model = get_model(model_name)(config)
+  #score_model = score_model.to(config.device)
+  #score_model = torch.nn.DataParallel(score_model)
+  return score_model
 
 
-def get_distiller_fn(
-    sde, model, params, states, train=False, return_state=False, pred_t=None
-):
-    assert isinstance(
-        sde, sde_lib.KVESDE
-    ), "Only KVE SDE is supported for building the denoiser"
-    model_fn = get_model_fn(model, params, states, train=train)
+def get_model_fn(model, train=False):
+  """Create a function to give the output of the score-based model.
 
-    if pred_t is None:
-        pred_t = sde.t_min
+  Args:
+    model: The score model.
+    train: `True` for training and `False` for evaluation.
 
-    def distiller_fn(x, t, rng=None):
-        in_x = batch_mul(x, 1 / jnp.sqrt(t**2 + sde.data_std**2))
-        cond_t = 0.25 * jnp.log(t)
-        denoiser, state = model_fn(in_x, cond_t, rng)
-        denoiser = batch_mul(
-            denoiser,
-            (t - pred_t) * sde.data_std / jnp.sqrt(t**2 + sde.data_std**2),
-        )
-        skip_x = batch_mul(
-            x, sde.data_std**2 / ((t - pred_t) ** 2 + sde.data_std**2)
-        )
-        denoiser = skip_x + denoiser
+  Returns:
+    A model function.
+  """
 
-        if return_state:
-            return denoiser, state
-        else:
-            return denoiser
-
-    return distiller_fn
-
-
-def get_gaussianizer_fn(
-    sde, model, params, states, train=False, return_state=False, pred_t=None
-):
-    assert isinstance(
-        sde, sde_lib.KVESDE
-    ), "Only KVE SDE is supported for building the denoiser"
-    model_fn = get_model_fn(model, params, states, train=train)
-
-    if pred_t is None:
-        pred_t = sde.t_min
-
-    def gaussianizer_fn(x, t, rng=None):
-        in_x = x / sde.data_std
-        cond_t = 0.25 * jnp.log(t)
-        model_output, state = model_fn(in_x, cond_t, rng)
-        model_output = x + batch_mul(model_output, t - pred_t)
-
-        if return_state:
-            return model_output, state
-        else:
-            return model_output
-
-    return gaussianizer_fn
-
-
-def get_score_fn(sde, model, params, states, train=False, return_state=False):
-    """Wraps `score_fn` so that the model output corresponds to a real time-dependent score function.
+  def model_fn(x, labels):
+    """Compute the output of the score-based model.
 
     Args:
-      sde: An `sde_lib.SDE` object that represents the forward SDE.
-      model: A `flax.linen.Module` object that represents the architecture of the score-based model.
-      params: A dictionary that contains all trainable parameters.
-      states: A dictionary that contains all other mutable parameters.
-      train: `True` for training and `False` for evaluation.
-      return_state: If `True`, return the new mutable states alongside the model output.
+      x: A mini-batch of input data.
+      labels: A mini-batch of conditioning variables for time steps. Should be interpreted differently
+        for different models.
 
     Returns:
-      A score function.
+      A tuple of (model output, new mutable states)
     """
-    model_fn = get_model_fn(model, params, states, train=train)
-
-    if isinstance(sde, sde_lib.VPSDE) or isinstance(sde, sde_lib.subVPSDE):
-
-        def score_fn(x, t, rng=None):
-            # Scale neural network output by standard deviation and flip sign
-            # For VP-trained models, t=0 corresponds to the lowest noise level
-            # The maximum value of time embedding is assumed to 999 for
-            # continuously-trained models.
-            cond_t = t * 999
-            model, state = model_fn(x, cond_t, rng)
-            std = sde.marginal_prob(jnp.zeros_like(x), t)[1]
-            score = batch_mul(-model, 1.0 / std)
-            if return_state:
-                return score, state
-            else:
-                return score
-
-    elif isinstance(sde, sde_lib.VESDE):
-
-        def score_fn(x, t, rng=None):
-            x = 2 * x - 1.0  # assuming x is in [0, 1]
-            std = sde.marginal_prob(jnp.zeros_like(x), t)[1]
-            score, state = model_fn(x, jnp.log(std), rng)
-            score = batch_mul(score, 1.0 / std)
-            if return_state:
-                return score, state
-            else:
-                return score
-
-    elif isinstance(sde, sde_lib.KVESDE):
-        denoiser_fn = get_denoiser_fn(
-            sde, model, params, states, train=train, return_state=True
-        )
-
-        def score_fn(x, t, rng=None):
-            denoiser, state = denoiser_fn(x, t, rng)
-            score = batch_mul(denoiser - x, 1 / t**2)
-            if return_state:
-                return score, state
-            else:
-                return score
-
+    if not train:
+      model.eval()
+      return model(x, labels)
     else:
-        raise NotImplementedError(
-            f"SDE class {sde.__class__.__name__} not yet supported."
-        )
+      model.train()
+      return model(x, labels)
 
-    return score_fn
+  return model_fn
 
 
-def get_denoiser_and_distiller_fn(
-    sde, model, params, states, train=False, return_state=False, pred_t=None
-):
-    """Wraps `score_fn` so that the model output corresponds to a real time-dependent score function.
+def get_score_fn(sde, model, train=False, continuous=False):
+  """Wraps `score_fn` so that the model output corresponds to a real time-dependent score function.
 
-    Args:
-      sde: An `sde_lib.SDE` object that represents the forward SDE.
-      model: A `flax.linen.Module` object that represents the architecture of the score-based model.
-      params: A dictionary that contains all trainable parameters.
-      states: A dictionary that contains all other mutable parameters.
-      train: `True` for training and `False` for evaluation.
-      return_state: If `True`, return the new mutable states alongside the model output.
-      pred_t: The time at which the denoiser is identity.
+  Args:
+    sde: An `sde_lib.SDE` object that represents the forward SDE.
+    model: A score model.
+    train: `True` for training and `False` for evaluation.
+    continuous: If `True`, the score-based model is expected to directly take continuous time steps.
 
-    Returns:
-      A score function.
-    """
-    assert isinstance(
-        sde, sde_lib.KVESDE
-    ), "Only KVE SDE is supported for joint training."
+  Returns:
+    A score function.
+  """
+  model_fn = get_model_fn(model, train=train)
 
-    model_fn = get_model_fn(model, params, states, train=train)
+  if isinstance(sde, sde_lib.VPSDE) or isinstance(sde, sde_lib.subVPSDE):
+    def score_fn(x, t):
+      # Scale neural network output by standard deviation and flip sign
+      if continuous or isinstance(sde, sde_lib.subVPSDE):
+        # For VP-trained models, t=0 corresponds to the lowest noise level
+        # The maximum value of time embedding is assumed to 999 for
+        # continuously-trained models.
+        labels = t * 999
+        score = model_fn(x, labels)
+        std = sde.marginal_prob(torch.zeros_like(x), t)[1]
+      else:
+        # For VP-trained models, t=0 corresponds to the lowest noise level
+        labels = t * (sde.N - 1)
+        score = model_fn(x, labels)
+        std = sde.sqrt_1m_alphas_cumprod.to(labels.device)[labels.long()]
 
-    if pred_t is None:
-        pred_t = sde.t_min
+      score = -score / std[:, None, None, None]
+      return score
 
-    from .ncsnpp import NCSNpp, JointNCSNpp
+  elif isinstance(sde, sde_lib.VESDE):
+    def score_fn(x, t):
+      if continuous:
+        labels = sde.marginal_prob(torch.zeros_like(x), t)[1]
+      else:
+        # For VE-trained models, t=0 corresponds to the highest noise level
+        labels = sde.T - t
+        labels *= sde.N - 1
+        labels = torch.round(labels).long()
 
-    def denoiser_distiller_fn(x, t, rng=None):
-        in_x = batch_mul(x, 1 / jnp.sqrt(t**2 + sde.data_std**2))
-        cond_t = 0.25 * jnp.log(t)
-        if isinstance(model, NCSNpp):
-            model_output, state = model_fn(in_x, cond_t, rng)
-            denoiser = model_output[..., :3]
-            distiller = model_output[..., 3:]
-        elif isinstance(model, JointNCSNpp):
-            (denoiser, distiller), state = model_fn(in_x, cond_t, rng)
+      score = model_fn(x, labels)
+      return score
 
-        denoiser = batch_mul(
-            denoiser, t * sde.data_std / jnp.sqrt(t**2 + sde.data_std**2)
-        )
-        skip_x = batch_mul(x, sde.data_std**2 / (t**2 + sde.data_std**2))
-        denoiser = skip_x + denoiser
+  else:
+    raise NotImplementedError(f"SDE class {sde.__class__.__name__} not yet supported.")
 
-        distiller = batch_mul(
-            distiller,
-            (t - pred_t) * sde.data_std / jnp.sqrt(t**2 + sde.data_std**2),
-        )
-        skip_x = batch_mul(
-            x, sde.data_std**2 / ((t - pred_t) ** 2 + sde.data_std**2)
-        )
-        distiller = skip_x + distiller
-
-        if return_state:
-            return (denoiser, distiller), state
-        else:
-            return denoiser, distiller
-
-    return denoiser_distiller_fn
+  return score_fn
 
 
 def to_flattened_numpy(x):
-    """Flatten a JAX array `x` and convert it to numpy."""
-    return np.asarray(x.reshape((-1,)))
+  """Flatten a torch tensor `x` and convert it to numpy."""
+  return x.detach().cpu().numpy().reshape((-1,))
 
 
 def from_flattened_numpy(x, shape):
-    """Form a JAX array with the given `shape` from a flattened numpy array `x`."""
-    return jnp.asarray(x).reshape(shape)
+  """Form a torch tensor with the given `shape` from a flattened numpy array `x`."""
+  return torch.from_numpy(x.reshape(shape))
 
 
-def create_classifier(prng_key, batch_size, ckpt_path):
-    """Create a noise-conditional image classifier.
+def get_distiller_fn(
+  sde, model, train=False, return_state=False, pred_t=None
+):
+  assert isinstance(
+    sde, sde_lib.KVESDE
+  ), "Only KVE SDE is supported for building the denoiser"
+  model_fn = get_model_fn(model, train=train)
 
-    Args:
-      prng_key: A JAX random state.
-      batch_size: The batch size of input data.
-      ckpt_path: The path to stored checkpoints for this classifier.
+  if pred_t is None:
+    pred_t = sde.t_min
 
-    Returns:
-      classifier: A `flax.linen.Module` object that represents the architecture of the classifier.
-      classifier_params: A dictionary that contains trainable parameters of the classifier.
-    """
-    input_shape = (batch_size, 32, 32, 3)
-    classifier = wideresnet_noise_conditional.WideResnet(
-        blocks_per_group=4, channel_multiplier=10, num_outputs=10
-    )
-    initial_variables = classifier.init(
-        {"params": prng_key, "dropout": jax.random.PRNGKey(0)},
-        jnp.ones(input_shape, dtype=jnp.float32),
-        jnp.ones((batch_size,), dtype=jnp.float32),
-        train=False,
-    )
-    model_state, init_params = initial_variables.pop("params")
-    classifier_params = checkpoints.restore_checkpoint(ckpt_path, init_params)
-    return classifier, classifier_params
+  def distiller_fn(x, t):
+    in_x = x * (1 / torch.sqrt(t**2 + sde.data_std**2))[:,None,None,None]
+    cond_t = 0.25 * torch.log(t)
+    denoiser = model_fn(in_x.permute(0,3,1,2), cond_t)
+    denoiser = denoiser * ((t - pred_t) * sde.data_std / torch.sqrt(t**2 + sde.data_std**2))[:,None,None,None]
+    skip_x = x * (sde.data_std**2 / ((t - pred_t) ** 2 + sde.data_std**2))[:,None,None,None]
+    denoiser = skip_x + denoiser.permute(0,2,3,1)
 
+    return denoiser
 
-def get_logit_fn(classifier, classifier_params):
-    """Create a logit function for the classifier."""
-
-    def preprocess(data):
-        image_mean = jnp.asarray([[[0.49139968, 0.48215841, 0.44653091]]])
-        image_std = jnp.asarray([[[0.24703223, 0.24348513, 0.26158784]]])
-        return (data - image_mean[None, ...]) / image_std[None, ...]
-
-    def logit_fn(data, ve_noise_scale):
-        """Give the logits of the classifier.
-
-        Args:
-          data: A JAX array of the input.
-          ve_noise_scale: time conditioning variables in the form of VE SDEs.
-
-        Returns:
-          logits: The logits given by the noise-conditional classifier.
-        """
-        data = preprocess(data)
-        logits = classifier.apply(
-            {"params": classifier_params},
-            data,
-            ve_noise_scale,
-            train=False,
-            mutable=False,
-        )
-        return logits
-
-    return logit_fn
-
-
-def get_classifier_grad_fn(logit_fn):
-    """Create the gradient function for the classifier in use of class-conditional sampling."""
-
-    def grad_fn(data, ve_noise_scale, labels):
-        def prob_fn(data):
-            logits = logit_fn(data, ve_noise_scale)
-            prob = jax.nn.log_softmax(logits, axis=-1)[
-                jnp.arange(labels.shape[0]), labels
-            ].sum()
-            return prob
-
-        return jax.grad(prob_fn)(data)
-
-    return grad_fn
+  return distiller_fn

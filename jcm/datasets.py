@@ -87,8 +87,8 @@ def get_dataset(
             ]
         )
 
-        train_ds = CIFAR10("./data", train=True, download=True, transform=transforms)
-        eval_ds = CIFAR10("./data", train=False, download=True, transform=transforms)
+        train_ds = CIFAR10("./data", train=True, download=False, transform=transforms)
+        eval_ds = CIFAR10("./data", train=False, download=False, transform=transforms)
 
         @torch.no_grad()
         def collate_fn(batch):

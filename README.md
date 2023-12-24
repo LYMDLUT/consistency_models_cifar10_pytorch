@@ -1,4 +1,4 @@
-# Consistency Models (CIFAR-10)
+# Unoffical Consistency Models for Pytorch (CIFAR-10)
 
 This is the codebase for [Consistency Models](https://arxiv.org/abs/2303.01469), implemented using JAX for our experiments on CIFAR-10. We have based our repository on [yang-song/score_sde](https://github.com/yang-song/score_sde), which was released under the Apache-2.0 license. We have modified the code to streamline diffusion model training, with additional implementations for consistency distillation, consistency training, and various sampling & editing algorithms included in the paper.
 

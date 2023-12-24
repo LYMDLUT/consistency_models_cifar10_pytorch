@@ -132,7 +132,7 @@ def latest_checkpoint(ckpt_dir, prefix="checkpoint_"):
 
 
 def restore_checkpoint(
-    ckpt_dir, target, step=None, prefix="checkpoint_", parallel=True
+      ckpt_dir, target, step=None, prefix="checkpoint_", parallel=True
 ):
     """Restore last/best checkpoint from checkpoints in path.
 
