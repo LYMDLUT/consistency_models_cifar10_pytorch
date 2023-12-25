@@ -202,10 +202,10 @@ def get_distiller_fn(
   def distiller_fn(x, t):
     in_x = x * (1 / torch.sqrt(t**2 + sde.data_std**2))[:,None,None,None]
     cond_t = 0.25 * torch.log(t)
-    denoiser = model_fn(in_x.permute(0,3,1,2), cond_t)
+    denoiser = model_fn(in_x, cond_t)
     denoiser = denoiser * ((t - pred_t) * sde.data_std / torch.sqrt(t**2 + sde.data_std**2))[:,None,None,None]
     skip_x = x * (sde.data_std**2 / ((t - pred_t) ** 2 + sde.data_std**2))[:,None,None,None]
-    denoiser = skip_x + denoiser.permute(0,2,3,1)
+    denoiser = skip_x + denoiser
 
     return denoiser
 
