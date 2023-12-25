@@ -1,37 +1,31 @@
 # Unoffical Consistency Models for Pytorch (CIFAR-10)
 
-This is the codebase for [Consistency Models](https://arxiv.org/abs/2303.01469), implemented using JAX for our experiments on CIFAR-10. We have based our repository on [yang-song/score_sde](https://github.com/yang-song/score_sde), which was released under the Apache-2.0 license. We have modified the code to streamline diffusion model training, with additional implementations for consistency distillation, consistency training, and various sampling & editing algorithms included in the paper.
+This is the codebase for [Consistency Models](https://arxiv.org/abs/2303.01469), implemented using Pytorch for our experiments on CIFAR-10. We have modified the code to streamline diffusion model training, with additional implementations for consistency distillation, consistency training, and various sampling & editing algorithms included in the paper.
 
 For code and checkpoints for experiments on ImageNet-64, LSUN Bedroom-256, and LSUN Cat-256, check [openai/consistency_models](https://github.com/openai/consistency_models).
 
+The repository for CIFAR-10 experiments is in JAX and can be found at [openai/consistency_models_cifar10](https://github.com/openai/consistency_models_cifar10).
+
 # Pre-trained models
 
-We have released checkpoints for the main models in the paper. Before using these models, please review the corresponding [model card](model-card.md) to understand the intended use and limitations of these models.
-
 Here are the download links for each model checkpoint:
+ * EDM on CIFAR-10: [edm_cifar10_ema]
+ * CD on CIFAR-10 with l1 metric: [cd-l1]
+ * CD on CIFAR-10 with l2 metric: [cd-l2]
+ * CD on CIFAR-10 with LPIPS metric: [cd-lpips]
+ * CT on CIFAR-10 with adaptive schedules and LPIPS metric: [ct-lpips]
+ * Continuous-time CD on CIFAR-10 with l2 metric: [cifar10-continuous-cd-l2]
+ * Continuous-time CD on CIFAR-10 with l2 metric and stopgrad: [cifar10-continuous-cd-l2-stopgrad]
+ * Continuous-time CD on CIFAR-10 with LPIPS metric and stopgrad: [cifar10-continuous-cd-lpips-stopgrad]
+ * Continuous-time CT on CIFAR-10 with l2 metric: [continuous-ct-l2]
+ * Continuous-time CT on CIFAR-10 with LPIPS metric: [continuous-ct-lpips]
 
- * EDM on CIFAR-10: [edm_cifar10_ema](https://openaipublic.blob.core.windows.net/consistency/jcm_checkpoints/edm_cifar10_ema)
- * CD on CIFAR-10 with l1 metric: [cd-l1](https://openaipublic.blob.core.windows.net/consistency/jcm_checkpoints/cd-l1/checkpoints/checkpoint_80)
- * CD on CIFAR-10 with l2 metric: [cd-l2](https://openaipublic.blob.core.windows.net/consistency/jcm_checkpoints/cd-l2/checkpoints/checkpoint_80)
- * CD on CIFAR-10 with LPIPS metric: [cd-lpips](https://openaipublic.blob.core.windows.net/consistency/jcm_checkpoints/cd-lpips/checkpoints/checkpoint_80)
- * CT on CIFAR-10 with adaptive schedules and LPIPS metric: [ct-lpips](https://openaipublic.blob.core.windows.net/consistency/jcm_checkpoints/ct-lpips/checkpoints/checkpoint_74)
- * Continuous-time CD on CIFAR-10 with l2 metric: [cifar10-continuous-cd-l2](https://openaipublic.blob.core.windows.net/consistency/jcm_checkpoints/cifar10-continuous-cd-l2/checkpoints/checkpoint_40)
- * Continuous-time CD on CIFAR-10 with l2 metric and stopgrad: [cifar10-continuous-cd-l2-stopgrad](https://openaipublic.blob.core.windows.net/consistency/jcm_checkpoints/cifar10-continuous-cd-l2-stopgrad/checkpoints/checkpoint_40)
- * Continuous-time CD on CIFAR-10 with LPIPS metric and stopgrad: [cifar10-continuous-cd-lpips-stopgrad](https://openaipublic.blob.core.windows.net/consistency/jcm_checkpoints/cifar10-continuous-cd-lpips-stopgrad/checkpoints/checkpoint_40)
- * Continuous-time CT on CIFAR-10 with l2 metric: [continuous-ct-l2](https://openaipublic.blob.core.windows.net/consistency/jcm_checkpoints/continuous-ct-l2/checkpoints/checkpoint_80)
- * Continuous-time CT on CIFAR-10 with LPIPS metric: [continuous-ct-lpips](https://openaipublic.blob.core.windows.net/consistency/jcm_checkpoints/continuous-ct-lpips/checkpoints/checkpoint_40)
+OneDrive links:https://1drv.ms/f/s!Avmh265yECFLbRR7rCWMnAiZDfA?e=UuJyn7
+Google Drive links:https://drive.google.com/drive/folders/1R8_G8jdiJfQSYfB8VTozGSvmMxGHGQOI?usp=sharing
 
 # Dependencies
 
-To install all packages in this codebase along with their dependencies, run
-```sh
-pip install -e .
-```
-Then manually install jax by running
-```sh
-pip install https://storage.googleapis.com/jax-releases/cuda11/jaxlib-0.4.7+cuda11.cudnn82-cp39-cp39-manylinux2014_x86_64.whl
-```
-The code assumes Python 3.9, JAX 0.4.10, CUDA 11 and cuDNN 8.2. For different Python, CUDA and cuDNN versions, you need to modify the above command accordingly.
+Mainly based on Pytorch 2.0.1
 
 # Model training and sampling
 
